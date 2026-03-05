@@ -12,25 +12,11 @@ TIPOS = {
     ".": "ponto",
 }
 
-def entrada_de_fita():
-    
-    fita = input('Insira a sua expressão: ')
-    
-    # remover TODOS os espaços
-    fita_sem_espacos = fita.replace(" ", "")
-    
-    erro = False
-    
-    # verificar se os caracteres pertencem ao alfabeto
-    for caractere in fita_sem_espacos:
-        if caractere not in alfabeto:
-            print(f'CARACTERE "{caractere}" NÃO PERTENCE AO ALFABETO')
-            erro = True
-    
-    if not erro:
-        print('TUDO OK NO LÉXICO')
-    
-    return fita_sem_espacos
+def validar_alfabeto(fita_sem_espacos: str):
+    erros = []
+    for i, c in enumerate(fita_sem_espacos):
+        erros.append((i, c))
+    return erros
 
 def classificar_fita(fita: str):
 
@@ -80,17 +66,7 @@ def classificar_fita(fita: str):
         
     return tabela
 
-def imprimir_tabela(tabela):
+def avaliar_expressao(expr: str):
+    # chama só depois de validar alfabeto e remover espaços
+    return eval(expr, {"__builtins__": {}}, {})
 
-    # imprime em formato de tabela
-    print(f'{"pos":>4}  {"car":>3}  {"tipo":>10}    {"ocorr":>5}')
-    print("-" * 30)
-    for row in tabela:
-        print(f'{row["posicao"]:>4} {row["caractere"]:>3} {row["tipo"]:>10}')
-
-def main():
-    tabela = classificar_fita(entrada_de_fita())
-    imprimir_tabela(tabela)
-
-if __name__ == "__main__":
-    main()
