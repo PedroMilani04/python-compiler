@@ -1,135 +1,102 @@
+import sys
+import os
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "functions"))
+
 import streamlit as st
 import pandas as pd
-
-# =========== ANALISADOR LÉXICO ===========
-
-# definir o alfabeto como string
-alfabeto = '0123456789.+-/*()'
-
-# definir os tipos 
-TIPOS = {
-    "+": "opSoma",
-    "-": "opSub",
-    "*": "opMult",
-    "/": "opDiv",
-    "(": "aP",
-    ")": "fP",
-    ".": "ponto",
-}
-
-def validar_alfabeto(fita_sem_espacos: str):
-    erros = []
-    for i, c in enumerate(fita_sem_espacos):
-        if c not in alfabeto:
-            erros.append((i, c))
-    return erros
-
-def classificar_fita(fita: str):
-
-    tabela = []
-    contagem_tipo = {} # conta quantas vezes cada tipo já apareceu
-
-    # estado que decide se é nint ou real 
-    em_numero = False
-    tem_ponto_no_numero = False
-
-    for pos, c in enumerate(fita):
-
-        # >>> IGNORA caracteres fora do alfabeto
-        if c not in alfabeto:
-            continue
-
-        # se for dígito, decide nint/nreal baseado se já apareceu ponto no número atual
-        if c.isdigit():
-            if not em_numero:
-                em_numero = True
-                tem_ponto_no_numero = False
-            
-            tipo = "nreal" if tem_ponto_no_numero else "nint"
-        
-        # se for ponto
-        elif c == ".":
-            tipo = "ponto"
-            if em_numero and not tem_ponto_no_numero:
-                tem_ponto_no_numero = True
-
-        else:
-            tipo = TIPOS.get(c)
-            em_numero = False
-            tem_ponto_no_numero = False
-        
-        # contagem de ocorrência dentro do tipo
-        contagem_tipo[tipo] = contagem_tipo.get(tipo, 0) + 1
-        ocorrencia = contagem_tipo[tipo]
-
-        tabela.append({
-            "posicao": pos, 
-            "caractere": c,
-            "tipo": tipo,
-            "ocorrencia_tipo": ocorrencia
-        })
-        
-    return tabela
-
-# --- Avaliação segura (opcional) ---
-# Aqui a gente permite somente números, operadores + - * / e parênteses e ponto.
-# A validação do alfabeto já barra qualquer outra coisa.
-def avaliar_expressao(expr: str):
-    # usando eval apenas depois de validar o alfabeto e remover espaços
-    # e com builtins bloqueado
-    return eval(expr, {"__builtins__": {}}, {})
-
-
+from lexicalanalyser import analisar
 
 # ============ UI Streamlit ===============
 
-st.set_page_config(page_title="Calculadora", layout="centered")
-st.title("Calculadora")
-st.caption("Digite uma expressão: ")
+st.set_page_config(page_title="Compilador — Analisador Léxico", layout="centered")
+st.title("🔬 Analisador Léxico")
+st.caption("Digite ou cole o código-fonte abaixo para análise:")
 
-expr = st.text_input("Expressão", value="(12+3.5)*2")
+codigo = st.text_area(
+    "Código-fonte",
+    value="int x\nx = 10 + 3.5\nif x > 5 then begin write x end",
+    height=160,
+)
 
-col1, col2 = st.columns(2)
-with col1:
-    analisar = st.button("🔎 Analisar léxico", use_container_width=True)
-with col2:
-    calcular = st.button("✅ Calcular resultado", use_container_width=True)
+analisar_btn = st.button("🔎 Analisar léxico", use_container_width=True)
 
-# Sempre trabalhar com a fita sem espaços
-fita = expr.replace(" ", "")
+if analisar_btn:
+    if not codigo.strip():
+        st.warning("Por favor, insira algum código para analisar.")
+    else:
+        resultado = analisar(codigo)
+        tokens            = resultado["tokens"]
+        erros             = resultado["erros"]
+        erros_semanticos  = resultado["erros_semanticos"]
 
-if analisar or calcular:
+        tem_erro = erros or erros_semanticos
 
+        # ── Status geral ───────────────────────────────────────────────
+        if not tem_erro:
+            st.success("✅ Análise concluída sem erros.")
 
-    
-    # tabela de tokens
-    tabela = classificar_fita(fita)
-    df = pd.DataFrame(tabela)
+        # ── Erros léxicos (caracteres inválidos) ───────────────────────
+        if erros:
+            msgs = ", ".join([f'pos {e["posicao"]}: "{e["caractere"]}"' for e in erros])
+            st.error(f"❌ Caractere(s) fora do alfabeto: {msgs}")
 
-    if analisar:
-        st.success("Análise léxica concluída.")
-        st.subheader("Tabela de tokens")
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        # ── Erros semânticos (variáveis não declaradas) ────────────────
+        if erros_semanticos:
+            st.error("❌ Identificador(es) usado(s) sem declaração prévia:")
+            df_sem = pd.DataFrame(erros_semanticos).rename(columns={
+                "linha":   "Linha",
+                "posicao": "Posição",
+                "lexema":  "Identificador",
+            })[["Linha", "Posição", "Identificador"]]
+            st.dataframe(df_sem, use_container_width=True, hide_index=True)
 
-    if calcular:
-        try:
-            resultado = avaliar_expressao(fita)
-            st.success(f"Resultado: **{resultado}**")
-            st.subheader("Tabela de tokens (para conferência)")
+        # ── Tabela de tokens ───────────────────────────────────────────
+        if tokens:
+            st.subheader("Tabela de Tokens")
+
+            # Remove da tabela os tokens que já aparecem na lista de erros semânticos
+            posicoes_erro = {e["posicao"] for e in erros_semanticos}
+            df = pd.DataFrame(tokens)
+            df = df[~df["posicao"].isin(posicoes_erro)]
+
+            df = df.rename(columns={
+                "posicao":         "Posição",
+                "lexema":          "Lexema",
+                "tipo":            "Tipo",
+                "ocorrencia_tipo": "Ocorrência",
+                "linha":           "Linha",
+            })[["Linha", "Posição", "Lexema", "Tipo", "Ocorrência"]]
+
             st.dataframe(df, use_container_width=True, hide_index=True)
-        except ZeroDivisionError:
-            st.error("Erro: divisão por zero.")
-        except Exception as e:
-            st.error(f"Não foi possível calcular a expressão. Erro: {e}")
 
+            with st.expander("📊 Resumo por tipo de token"):
+                resumo = (
+                    df.groupby("Tipo")
+                    .agg(Total=("Lexema", "count"))
+                    .reset_index()
+                    .sort_values("Total", ascending=False)
+                )
+                st.dataframe(resumo, use_container_width=True, hide_index=True)
+        else:
+            st.info("Nenhum token reconhecido.")
 
-    erros = validar_alfabeto(fita)
-    if erros:
-        msg = ", ".join([f'pos {i}: "{c}"' for i, c in erros])
-        st.error(f"Caracter(es) fora do alfabeto: {msg}")
-
-
-with st.expander("Ver regras do alfabeto"):
-    st.write(f"Alfabeto permitido: `{alfabeto}`")
-    st.write("Tipos: nint, nreal, opSoma, opSub, opMult, opDiv, aP, fP, ponto")
-
+# ── Rodapé informativo ─────────────────────────────────────────────────────────
+with st.expander("📖 Tokens reconhecidos"):
+    st.markdown("""
+| Categoria | Tokens |
+|-----------|--------|
+| **Tipos** | `tipoInt`, `tipoBool` |
+| **Palavras-chave** | `IF`, `THEN`, `ELSE`, `WHILE`, `DO`, `BEGIN`, `END` |
+| **Funções** | `funcao`, `indLer`, `indEscrever` |
+| **Literais** | `true`, `false` |
+| **Operadores** | `opSoma`, `opSub`, `opMult`, `opDiv`, `opMaior`, `opMenor`, `Equal` |
+| **Delimitadores** | `abreP`, `fechaP`, `ponto` |
+| **Literais numéricos** | `inteiro`, `real` |
+| **Identificadores** | `var` |
+    """)
+    st.markdown("""
+**Comentários ignorados:**
+- Linha: `\\ comentário aqui`
+- Bloco: `{ comentário aqui }`
+    """)
