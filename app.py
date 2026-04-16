@@ -9,8 +9,8 @@ from lexicalanalyser import analisar
 
 # ============ UI Streamlit ===============
 
-st.set_page_config(page_title="Compilador — Analisador Léxico", layout="centered")
-st.title("🔬 Analisador Léxico")
+st.set_page_config(page_title="Compilador", layout="centered")
+st.title("🔬 Compilador")
 st.caption("Digite ou cole o código-fonte abaixo para análise:")
 
 codigo = st.text_area(
@@ -19,7 +19,7 @@ codigo = st.text_area(
     height=160,
 )
 
-analisar_btn = st.button("🔎 Analisar léxico", use_container_width=True)
+analisar_btn = st.button("🔎 Analisar", use_container_width=True)
 
 if analisar_btn:
     if not codigo.strip():
@@ -53,7 +53,7 @@ if analisar_btn:
 
         # ── Tabela de tokens ───────────────────────────────────────────
         if tokens:
-            st.subheader("Tabela de Tokens")
+            st.subheader("Tabela Léxica")
 
             # Remove da tabela os tokens que já aparecem na lista de erros semânticos
             posicoes_erro = {e["posicao"] for e in erros_semanticos}

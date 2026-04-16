@@ -4,6 +4,7 @@ import ply.lex as lex
 RESERVADO = {
     "int": "tipoInt",
     "bool": "tipoBool",
+    "program": "programa",
     "procedure": "funcao",
     "read": "indLer",
     "write": "indEscrever",
@@ -50,7 +51,7 @@ t_fechaP  = r'\)'
 t_ponto   = r'\.'
 
 # Ignorar comentários
-t_ignore_ComentarioS = r'\\.*'
+t_ignore_ComentarioS = r'/ /.*'
 t_ignore_ComentarioL = r'\{[^}]*\}'
 
 # Ignorar espaços e tabs
