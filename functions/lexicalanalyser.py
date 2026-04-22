@@ -2,43 +2,72 @@ import ply.lex as lex
 
 # Lista de palavras reservadas
 RESERVADO = {
-    "int": "tipoInt",
-    "bool": "tipoBool",
-    "program": "programa",
+    "int":       "tipoInt",
+    "bool":      "tipoBool",
+    "program":   "programa",
     "procedure": "funcao",
-    "read": "indLer",
-    "write": "indEscrever",
-    "true": "true",
-    "false": "false",
-    "if": "IF",
-    "then": "THEN",
-    "else": "ELSE",
-    "while": "WHILE",
-    "do": "DO",
-    "begin": "BEGIN",
-    "end": "END"
+    "read":      "indLer",
+    "write":     "indEscrever",
+    "true":      "true",
+    "false":     "false",
+    "if":        "IF",
+    "then":      "THEN",
+    "else":      "ELSE",
+    "while":     "WHILE",
+    "do":        "DO",
+    "begin":     "BEGIN",
+    "end":       "END",
+    "or":        "OR",
+    "and":       "AND",
+    "not":       "NOT",
+    "div":       "DIV",
+    "var":       "tipoVar",   # palavra reservada "var" em parâmetros formais
 }
 
 # Lista de tokens
 TOKENS = {
-    "opSoma",
-    "opSub",
-    "opMult",
-    "opDiv",
-    "opMaior",
-    "opMenor",
-    "Equal",
-    "abreP",
-    "fechaP",
-    "ponto",
-    "real",
-    "inteiro",
-    "var"
+    # operadores aritméticos
+    "opSoma", "opSub", "opMult", "opDiv", "DIV",
+    # operadores relacionais
+    "opMaior", "opMenor", "Equal", "diferente", "menorIgual", "maiorIgual",
+    # operadores lógicos
+    "OR", "AND", "NOT",
+    # atribuição
+    "atrib",
+    # delimitadores
+    "abre_p", "fecha_p", "abre_col", "fecha_col",
+    "ponto_virgula", "virgula", "dois_pontos", "ponto",
+    # literais
+    "real", "inteiro",
+    # identificador genérico
+    "var",
 }
 
-tokens = list(TOKENS) + list(RESERVADO.values())
+tokens = list(TOKENS | set(RESERVADO.values()))
 
-# Expressões regulares simples
+# -- Operadores relacionais compostos (devem vir antes dos simples) ----------
+def t_diferente(t):
+    r'<>'
+    return t
+
+def t_menorIgual(t):
+    r'<='
+    return t
+
+def t_maiorIgual(t):
+    r'>='
+    return t
+
+# -- Atribuição (:=) antes de dois_pontos (:) --------------------------------
+def t_atrib(t):
+    r':='
+    return t
+
+def t_dois_pontos(t):
+    r':'
+    return t
+
+# -- Operadores simples -------------------------------------------------------
 t_opSoma  = r'\+'
 t_opSub   = r'-'
 t_opMult  = r'\*'
@@ -46,63 +75,73 @@ t_opDiv   = r'/'
 t_opMaior = r'>'
 t_opMenor = r'<'
 t_Equal   = r'='
-t_abreP   = r'\('
-t_fechaP  = r'\)'
-t_ponto   = r'\.'
 
-# Ignorar comentários
-t_ignore_ComentarioS = r'/ /.*'
+# -- Delimitadores ------------------------------------------------------------
+t_abre_p      = r'\('
+t_fecha_p     = r'\)'
+t_abre_col    = r'\['
+t_fecha_col   = r'\]'
+t_ponto_virgula = r';'
+t_virgula     = r','
+t_ponto       = r'\.'
+
+# -- Ignorar comentários (devem estar ANTES de t_ignore) ---------------------
+# Comentário de bloco: { ... }
 t_ignore_ComentarioL = r'\{[^}]*\}'
+# Comentário de linha: // ...
+t_ignore_ComentarioS = r'//[^\n]*'
 
 # Ignorar espaços e tabs
 t_ignore = ' \t'
 
-# Números reais
+# -- Números reais (antes de inteiro) ----------------------------------------
 def t_real(t):
     r'[0-9]+\.[0-9]+'
     t.value = float(t.value)
     return t
 
-# Inteiros
+# -- Inteiros -----------------------------------------------------------------
 def t_inteiro(t):
     r'[0-9]+'
     t.value = int(t.value)
     return t
 
-# Variáveis e palavras reservadas
+# -- Identificadores e palavras reservadas ------------------------------------
 def t_var(t):
     r'[a-zA-Z_][a-zA-Z_0-9]*'
     t.type = RESERVADO.get(t.value, 'var')
     return t
 
-# Controle de linhas
+# -- Controle de linhas -------------------------------------------------------
 def t_newline(t):
     r'\n+'
     t.lexer.lineno += len(t.value)
 
-# Tratamento de erro — coleta o erro em vez de só imprimir
+# -- Tratamento de erro léxico ------------------------------------------------
 erros_lexicos = []
 
 def t_error(t):
     erros_lexicos.append({
-        "posicao": t.lexpos,
-        "caractere": t.value[0]
+        "posicao":    t.lexpos,
+        "caractere":  t.value[0],
     })
     t.lexer.skip(1)
 
 
+# ============================================================================
+# Interface pública
+# ============================================================================
 def analisar(codigo: str) -> dict:
     """
     Recebe o código-fonte como string.
     Retorna um dicionário com:
       - tokens:           lista de dicts {posicao, lexema, tipo, linha, ocorrencia_tipo}
-      - erros:            lista de dicts {posicao, caractere}       ← caracteres inválidos
-      - erros_semanticos: lista de dicts {posicao, lexema, linha}   ← vars não declaradas
+      - erros:            lista de dicts {posicao, caractere}
+      - erros_semanticos: lista de dicts {posicao, lexema, linha}
     """
     global erros_lexicos
     erros_lexicos = []
 
-    # ── Passagem 1: coleta todos os tokens ──────────────────────────────
     lexer = lex.lex()
     lexer.input(codigo)
 
@@ -120,27 +159,59 @@ def analisar(codigo: str) -> dict:
             "linha":           tok.lineno,
         })
 
-    # ── Passagem 2: descobrir variáveis declaradas ───────────────────────
-    # Uma variável é declarada quando o token anterior é tipoInt ou tipoBool
+    # ── Passagem 2: descobrir variáveis declaradas ───────────────────────────
+    # Reconhece: tipoInt/tipoBool <id> {, <id>}
+    # Também marca como "não-variável" ids que seguem 'program' ou 'procedure'
     TIPOS_DECLARACAO = {"tipoInt", "tipoBool"}
+    # Tokens cujo identificador seguinte NÃO é uma variável do programa
+    CONTEXTO_NAO_VAR = {"programa", "funcao"}
+
     declaradas = set()
+    ids_nao_var = set()  # posições de tokens 'var' que são nomes de prog/proc
 
-    for i, tok in enumerate(resultado):
-        if tok["tipo"] in TIPOS_DECLARACAO:
+    i = 0
+    while i < len(resultado):
+        tok = resultado[i]
+
+        # Nome do programa ou procedimento — não é variável
+        if tok["tipo"] in CONTEXTO_NAO_VAR:
             if i + 1 < len(resultado) and resultado[i + 1]["tipo"] == "var":
-                declaradas.add(resultado[i + 1]["lexema"])
+                ids_nao_var.add(resultado[i + 1]["posicao"])
+            i += 1
+            continue
 
-    # ── Passagem 3: checar usos de 'var' não declaradas ─────────────────
+        # Declaração de variável: tipo seguido de lista de ids
+        if tok["tipo"] in TIPOS_DECLARACAO:
+            i += 1
+            # percorre a lista: id {, id}
+            while i < len(resultado):
+                if resultado[i]["tipo"] == "var":
+                    declaradas.add(resultado[i]["lexema"])
+                    i += 1
+                    # próximo pode ser vírgula (continua lista) ou outra coisa (fim)
+                    if i < len(resultado) and resultado[i]["tipo"] == "virgula":
+                        i += 1  # consome a vírgula e continua
+                    else:
+                        break
+                else:
+                    break
+            continue
+
+        i += 1
+
+    # ── Passagem 3: checar usos de 'var' não declaradas ─────────────────────
     erros_semanticos = []
     for i, tok in enumerate(resultado):
         if tok["tipo"] == "var":
-            # é a própria declaração (vem logo após tipoInt/tipoBool) → ok
+            # é nome de programa ou procedimento — ignora
+            if tok["posicao"] in ids_nao_var:
+                continue
+            # é a própria declaração (vem logo após tipoInt/tipoBool) — ignora
             if i > 0 and resultado[i - 1]["tipo"] in TIPOS_DECLARACAO:
                 continue
-            # foi declarada anteriormente → ok
+            # foi declarada — ignora
             if tok["lexema"] in declaradas:
                 continue
-            # uso sem declaração
             erros_semanticos.append({
                 "posicao": tok["posicao"],
                 "lexema":  tok["lexema"],
