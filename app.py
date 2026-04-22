@@ -6,17 +6,27 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "functions"))
 import streamlit as st
 import pandas as pd
 from lexicalanalyser import analisar
+from sintaticalanalyser import analisar_sintatico
 
 # ============ UI Streamlit ===============
 
-st.set_page_config(page_title="Compilador", layout="centered")
-st.title("🔬 Compilador")
+st.set_page_config(page_title="Compilador LALG", layout="centered")
+st.title("🔬 Compilador LALG")
 st.caption("Digite ou cole o código-fonte abaixo para análise:")
 
 codigo = st.text_area(
     "Código-fonte",
-    value="int x\nx = 10 + 3.5\nif x > 5 then begin write x end",
-    height=160,
+    value=(
+        "program exemplo;\n"
+        "int x, y;\n"
+        "begin\n"
+        "  x := 10;\n"
+        "  y := x + 3;\n"
+        "  if x > 5 then\n"
+        "    write(y)\n"
+        "end."
+    ),
+    height=200,
 )
 
 analisar_btn = st.button("🔎 Analisar", use_container_width=True)
@@ -25,23 +35,30 @@ if analisar_btn:
     if not codigo.strip():
         st.warning("Por favor, insira algum código para analisar.")
     else:
-        resultado = analisar(codigo)
-        tokens            = resultado["tokens"]
-        erros             = resultado["erros"]
-        erros_semanticos  = resultado["erros_semanticos"]
+        # ── Análise Léxica ─────────────────────────────────────────────
+        resultado_lex        = analisar(codigo)
+        tokens               = resultado_lex["tokens"]
+        erros_lex            = resultado_lex["erros"]
+        erros_semanticos     = resultado_lex["erros_semanticos"]
 
-        tem_erro = erros or erros_semanticos
+        # ── Análise Sintática ──────────────────────────────────────────
+        resultado_sin        = analisar_sintatico(tokens)
+        erros_sintaticos     = resultado_sin["erros_sintaticos"]
+
+        tem_erro = erros_lex or erros_semanticos or erros_sintaticos
 
         # ── Status geral ───────────────────────────────────────────────
         if not tem_erro:
             st.success("✅ Análise concluída sem erros.")
 
-        # ── Erros léxicos (caracteres inválidos) ───────────────────────
-        if erros:
-            msgs = ", ".join([f'pos {e["posicao"]}: "{e["caractere"]}"' for e in erros])
+        # ── Erros léxicos ──────────────────────────────────────────────
+        if erros_lex:
+            msgs = ", ".join(
+                [f'pos {e["posicao"]}: "{e["caractere"]}"' for e in erros_lex]
+            )
             st.error(f"❌ Caractere(s) fora do alfabeto: {msgs}")
 
-        # ── Erros semânticos (variáveis não declaradas) ────────────────
+        # ── Erros semânticos ───────────────────────────────────────────
         if erros_semanticos:
             st.error("❌ Identificador(es) usado(s) sem declaração prévia:")
             df_sem = pd.DataFrame(erros_semanticos).rename(columns={
@@ -51,11 +68,22 @@ if analisar_btn:
             })[["Linha", "Posição", "Identificador"]]
             st.dataframe(df_sem, use_container_width=True, hide_index=True)
 
+        # ── Erros sintáticos ───────────────────────────────────────────
+        if erros_sintaticos:
+            st.error("❌ Erro(s) sintático(s) encontrado(s):")
+            df_sin = pd.DataFrame(erros_sintaticos).rename(columns={
+                "linha":      "Linha",
+                "posicao":    "Posição",
+                "lexema":     "Encontrado (lexema)",
+                "encontrado": "Encontrado (tipo)",
+                "esperado":   "Esperado",
+            })[["Linha", "Posição", "Encontrado (lexema)", "Encontrado (tipo)", "Esperado"]]
+            st.dataframe(df_sin, use_container_width=True, hide_index=True)
+
         # ── Tabela de tokens ───────────────────────────────────────────
         if tokens:
             st.subheader("Tabela Léxica")
 
-            # Remove da tabela os tokens que já aparecem na lista de erros semânticos
             posicoes_erro = {e["posicao"] for e in erros_semanticos}
             df = pd.DataFrame(tokens)
             df = df[~df["posicao"].isin(posicoes_erro)]
@@ -88,15 +116,18 @@ with st.expander("📖 Tokens reconhecidos"):
 |-----------|--------|
 | **Tipos** | `tipoInt`, `tipoBool` |
 | **Palavras-chave** | `IF`, `THEN`, `ELSE`, `WHILE`, `DO`, `BEGIN`, `END` |
-| **Funções** | `funcao`, `indLer`, `indEscrever` |
+| **Lógicos** | `AND`, `OR`, `NOT`, `DIV` |
+| **Funções** | `funcao` (procedure), `indLer` (read), `indEscrever` (write) |
 | **Literais** | `true`, `false` |
-| **Operadores** | `opSoma`, `opSub`, `opMult`, `opDiv`, `opMaior`, `opMenor`, `Equal` |
-| **Delimitadores** | `abreP`, `fechaP`, `ponto` |
+| **Operadores aritméticos** | `opSoma`, `opSub`, `opMult`, `opDiv` |
+| **Operadores relacionais** | `opMaior`, `opMenor`, `Equal`, `diferente`, `menorIgual`, `maiorIgual` |
+| **Atribuição** | `atrib` (`:=`) |
+| **Delimitadores** | `abre_p`, `fecha_p`, `abre_col`, `fecha_col`, `ponto_virgula`, `virgula`, `dois_pontos`, `ponto` |
 | **Literais numéricos** | `inteiro`, `real` |
 | **Identificadores** | `var` |
     """)
     st.markdown("""
 **Comentários ignorados:**
-- Linha: `\\ comentário aqui`
+- Linha: `// comentário aqui`
 - Bloco: `{ comentário aqui }`
     """)
