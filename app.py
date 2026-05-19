@@ -5,8 +5,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "functions"))
 
 import streamlit as st
 import pandas as pd
+# pyrefly: ignore [missing-import]
 from lexicalanalyser import analisar
+# pyrefly: ignore [missing-import]
 from sintaticalanalyser import analisar_sintatico
+from tree_renderer import parse_tree_to_dot
 
 # ============ UI Streamlit ===============
 
@@ -18,12 +21,10 @@ codigo = st.text_area(
     "Código-fonte",
     value=(
         "program exemplo;\n"
-        "int x, y;\n"
+        "int x;\n"
         "begin\n"
         "  x := 10;\n"
-        "  y := x + 3;\n"
-        "  if x > 5 then\n"
-        "    write(y)\n"
+        "  write(x)\n"
         "end."
     ),
     height=200,
@@ -44,6 +45,7 @@ if analisar_btn:
         # ── Análise Sintática ──────────────────────────────────────────
         resultado_sin        = analisar_sintatico(tokens)
         erros_sintaticos     = resultado_sin["erros_sintaticos"]
+        arvore_sintatica     = resultado_sin["arvore"]
 
         tem_erro = erros_lex or erros_semanticos or erros_sintaticos
 
@@ -79,6 +81,16 @@ if analisar_btn:
                 "esperado":   "Esperado",
             })[["Linha", "Posição", "Encontrado (lexema)", "Encontrado (tipo)", "Esperado"]]
             st.dataframe(df_sin, use_container_width=True, hide_index=True)
+
+        # ── Árvore sintática preditiva ────────────────────────────────
+        st.subheader("🌳 Árvore Sintática Preditiva (Top-Down)")
+        if arvore_sintatica is not None:
+            dot_src = parse_tree_to_dot(arvore_sintatica)
+            st.graphviz_chart(dot_src, use_container_width=True)
+            with st.expander("🔍 Ver fonte DOT da árvore"):
+                st.code(dot_src, language="dot")
+        else:
+            st.warning("Árvore não disponível (erros impediram a construção).")
 
         # ── Tabela de tokens ───────────────────────────────────────────
         if tokens:

@@ -4,7 +4,7 @@ Analisador sintático descendente recursivo para a linguagem LALG
 (Pascal Simplificado) — baseado na gramática do PDF de especificação.
 
 Recebe a lista de tokens produzida por lexicalanalyser.analisar()
-e retorna {"erros_sintaticos": [...]}.
+e retorna {"erros_sintaticos": [...], "arvore": ParseNode | None}.
 
 Cada erro tem o formato:
   {
@@ -23,6 +23,31 @@ Estratégia de recuperação de erros:
 
 from __future__ import annotations
 from typing import Optional
+
+
+# ---------------------------------------------------------------------------
+# Nó da árvore sintática
+# ---------------------------------------------------------------------------
+class ParseNode:
+    """Nó de uma árvore sintática preditiva (top-down)."""
+
+    def __init__(self, label: str, token_lexema: str = ""):
+        self.label: str = label                  # nome da regra ou terminal
+        self.lexema: str = token_lexema          # valor do token (apenas folhas terminais)
+        self.children: list[ParseNode] = []
+
+    def add(self, child: "ParseNode") -> "ParseNode":
+        """Adiciona um filho e retorna o filho (encadeamento)."""
+        if child is not None:
+            self.children.append(child)
+        return child
+
+    def is_leaf(self) -> bool:
+        return len(self.children) == 0
+
+    def __repr__(self) -> str:
+        return f"ParseNode({self.label!r}, lexema={self.lexema!r}, children={len(self.children)})"
+
 
 # ---------------------------------------------------------------------------
 # Conjuntos de sincronização usados na recuperação de erros
@@ -55,8 +80,6 @@ _EOF = _Token({"tipo": "EOF", "lexema": "EOF", "linha": -1, "posicao": -1})
 # ---------------------------------------------------------------------------
 class Parser:
     def __init__(self, tokens: list[dict]):
-        # Filtra tokens que não pertencem à gramática (erros léxicos já
-        # reportados pelo analisador léxico não devem atrapalhar o sintático)
         self._tokens: list[_Token] = [_Token(t) for t in tokens]
         self._pos: int = 0
         self.erros: list[dict] = []
@@ -76,12 +99,12 @@ class Parser:
     def _check(self, *tipos: str) -> bool:
         return self._peek().tipo in tipos
 
-    def _consome(self, tipo: str, descricao: str = "") -> Optional[_Token]:
-        """Consome o token esperado ou registra erro e retorna None."""
+    def _consome(self, tipo: str, descricao: str = "") -> Optional[ParseNode]:
+        """Consome o token esperado; retorna um nó terminal ou None."""
         t = self._peek()
         if t.tipo == tipo:
             self._advance()
-            return t
+            return ParseNode(f"[{tipo}]", t.lexema)
         esperado = descricao or tipo
         self._erro(t, esperado)
         return None
@@ -106,35 +129,33 @@ class Parser:
 
     # ================================================================ gramática
     # Regra 1: <programa> ::= program <identificador> ; <bloco> .
-    def programa(self):
-        self._consome("programa", "program")
-        self._consome("var",      "<identificador>")
-        self._consome("ponto_virgula", ";")
-        self._bloco()
-        self._consome("ponto", ".")
+    def programa(self) -> ParseNode:
+        node = ParseNode("<programa>")
+        node.add(self._consome("programa", "program"))
+        node.add(self._consome("var",      "<identificador>"))
+        node.add(self._consome("ponto_virgula", ";"))
+        node.add(self._bloco())
+        node.add(self._consome("ponto", "."))
+        return node
 
     # Regra 2: <bloco> ::= [<parte decl vars>] [<parte decl subrot>] <cmd composto>
-    def _bloco(self):
-        # parte de declarações de variáveis (começa com tipoInt ou tipoBool)
+    def _bloco(self) -> ParseNode:
+        node = ParseNode("<bloco>")
         if self._check("tipoInt", "tipoBool"):
-            self._parte_decl_vars()
+            node.add(self._parte_decl_vars())
 
-        # parte de declarações de subrotinas (começa com procedure)
         while self._check("funcao"):   # funcao == "procedure"
-            self._decl_procedimento()
+            node.add(self._decl_procedimento())
 
-        # comando composto obrigatório
-        self._cmd_composto()
+        node.add(self._cmd_composto())
+        return node
 
     # ---------------------------------------------------------------- Declarações
     # Regra 3: <parte decl vars> ::= <decl vars> {; <decl vars>} ;
-    # O ";" final da seção é consumido aqui; se não vier outro tipo após ";",
-    # o ";" não é consumido (pertence ao bloco externo ou não existe).
-    def _parte_decl_vars(self):
-        self._decl_vars()
-        # Enquanto houver ";" seguido de outro tipo, é outra declaração
+    def _parte_decl_vars(self) -> ParseNode:
+        node = ParseNode("<parte-decl-vars>")
+        node.add(self._decl_vars())
         while self._check("ponto_virgula"):
-            # LL(2): espia o token após o ";"
             prox_pos = self._pos + 1
             prox_tipo = (
                 self._tokens[prox_pos].tipo
@@ -142,193 +163,256 @@ class Parser:
                 else "EOF"
             )
             if prox_tipo in ("tipoInt", "tipoBool"):
+                node.add(ParseNode("[;]", ";"))
                 self._advance()   # consome ";"
-                self._decl_vars()
+                node.add(self._decl_vars())
             else:
-                # ";" pertence ao separador de comandos ou ao bloco — para
+                node.add(ParseNode("[;]", ";"))
                 self._advance()   # consome o ";" final da seção de declarações
                 break
+        return node
 
     # Regra 4: <decl vars> ::= <tipo> <lista de ids>
-    def _decl_vars(self):
+    def _decl_vars(self) -> ParseNode:
+        node = ParseNode("<decl-vars>")
         if not self._check("tipoInt", "tipoBool"):
             self._erro(self._peek(), "int | bool")
             self._sincroniza(_SYNC_DECL_VAR)
-            return
-        self._advance()   # consome tipo
-        self._lista_ids()
+            return node
+        t = self._advance()
+        node.add(ParseNode(f"[{t.tipo}]", t.lexema))
+        node.add(self._lista_ids())
+        return node
 
     # Regra 5: <lista de ids> ::= <id> {, <id>}
-    def _lista_ids(self):
-        self._consome("var", "<identificador>")
+    def _lista_ids(self) -> ParseNode:
+        node = ParseNode("<lista-ids>")
+        node.add(self._consome("var", "<identificador>"))
         while self._check("virgula"):
+            node.add(ParseNode("[,]", ","))
             self._advance()
-            self._consome("var", "<identificador>")
+            node.add(self._consome("var", "<identificador>"))
+        return node
 
     # Regra 7: <decl procedimento> ::= procedure <id> [<params formais>] ; <bloco>
-    def _decl_procedimento(self):
-        self._consome("funcao", "procedure")
-        self._consome("var", "<identificador>")
+    def _decl_procedimento(self) -> ParseNode:
+        node = ParseNode("<decl-procedimento>")
+        node.add(self._consome("funcao", "procedure"))
+        node.add(self._consome("var", "<identificador>"))
         if self._check("abre_p"):
-            self._params_formais()
-        self._consome("ponto_virgula", ";")
-        self._bloco()
+            node.add(self._params_formais())
+        node.add(self._consome("ponto_virgula", ";"))
+        node.add(self._bloco())
+        return node
 
     # Regra 8: <params formais> ::= ( <seção> {; <seção>} )
-    def _params_formais(self):
-        self._consome("abre_p", "(")
-        self._secao_params()
+    def _params_formais(self) -> ParseNode:
+        node = ParseNode("<params-formais>")
+        node.add(self._consome("abre_p", "("))
+        node.add(self._secao_params())
         while self._check("ponto_virgula"):
+            node.add(ParseNode("[;]", ";"))
             self._advance()
-            self._secao_params()
-        self._consome("fecha_p", ")")
+            node.add(self._secao_params())
+        node.add(self._consome("fecha_p", ")"))
+        return node
 
     # Regra 9: <seção params formais> ::= [var] <lista ids> : <id>
-    def _secao_params(self):
-        if self._check("tipoVar"):   # token "var" como palavra reservada
+    def _secao_params(self) -> ParseNode:
+        node = ParseNode("<secao-params>")
+        if self._check("tipoVar"):
+            node.add(ParseNode("[tipoVar]", "var"))
             self._advance()
-        self._lista_ids()
-        self._consome("dois_pontos", ":")
-        self._consome("var", "<identificador>")
+        node.add(self._lista_ids())
+        node.add(self._consome("dois_pontos", ":"))
+        node.add(self._consome("var", "<identificador>"))
+        return node
 
     # ---------------------------------------------------------------- Comandos
     # Regra 10: <cmd composto> ::= begin <cmd> {; <cmd>} end
-    def _cmd_composto(self):
-        self._consome("BEGIN", "begin")
-        self._comando()
+    def _cmd_composto(self) -> ParseNode:
+        node = ParseNode("<cmd-composto>")
+        node.add(self._consome("BEGIN", "begin"))
+        node.add(self._comando())
         while self._check("ponto_virgula"):
+            node.add(ParseNode("[;]", ";"))
             self._advance()
-            # "end" pode vir direto após ";" (comando vazio permitido)
             if self._check("END"):
                 break
-            self._comando()
-        self._consome("END", "end")
+            node.add(self._comando())
+        node.add(self._consome("END", "end"))
+        return node
 
     # Regra 11: <comando> ::= <atrib> | <chamada proc> | <cmd composto>
     #                        | <cmd condicional> | <cmd repetitivo>
-    def _comando(self):
+    def _comando(self) -> ParseNode:
+        node = ParseNode("<comando>")
         tok = self._peek()
 
         if tok.tipo == "var":
-            # pode ser atribuição ou chamada de procedimento
-            # olha o próximo token: se for ":=" é atribuição, caso contrário chamada
-            self._advance()  # consome o identificador
-            if self._check("atrib"):          # :=
-                self._advance()               # consome :=
-                self._expressao()
-            elif self._check("abre_p"):       # chamada com argumentos
+            id_node = ParseNode(f"[var]", tok.lexema)
+            self._advance()
+            if self._check("atrib"):
+                atrib_node = ParseNode("<atribuição>")
+                atrib_node.add(id_node)
+                atrib_node.add(ParseNode("[:=]", ":="))
                 self._advance()
-                self._lista_expressoes()
-                self._consome("fecha_p", ")")
-            # else: chamada sem parâmetros — identificador já foi consumido, ok
+                atrib_node.add(self._expressao())
+                node.add(atrib_node)
+            elif self._check("abre_p"):
+                call_node = ParseNode("<chamada-proc>")
+                call_node.add(id_node)
+                call_node.add(ParseNode("[(]", "("))
+                self._advance()
+                call_node.add(self._lista_expressoes())
+                call_node.add(self._consome("fecha_p", ")"))
+                node.add(call_node)
+            else:
+                # chamada sem parâmetros
+                call_node = ParseNode("<chamada-proc>")
+                call_node.add(id_node)
+                node.add(call_node)
 
         elif tok.tipo in ("indLer", "indEscrever"):
-            # read/write são tratados como chamada de procedimento
+            io_node = ParseNode(f"<{tok.lexema}>")
+            io_node.add(ParseNode(f"[{tok.tipo}]", tok.lexema))
             self._advance()
             if self._check("abre_p"):
+                io_node.add(ParseNode("[(]", "("))
                 self._advance()
-                self._lista_expressoes()
-                self._consome("fecha_p", ")")
+                io_node.add(self._lista_expressoes())
+                io_node.add(self._consome("fecha_p", ")"))
+            node.add(io_node)
 
         elif tok.tipo == "BEGIN":
-            self._cmd_composto()
+            node.add(self._cmd_composto())
 
         elif tok.tipo == "IF":
-            self._cmd_condicional()
+            node.add(self._cmd_condicional())
 
         elif tok.tipo == "WHILE":
-            self._cmd_repetitivo()
+            node.add(self._cmd_repetitivo())
 
         elif tok.tipo in _SYNC_COMANDO:
-            # comando vazio / final de bloco — não consome, deixa o chamador lidar
-            pass
+            # comando vazio — não consome
+            node.add(ParseNode("<vazio>"))
 
         else:
             self._erro(tok, "comando válido (atribuição, if, while, begin, read, write)")
             self._sincroniza(_SYNC_COMANDO)
 
-    # Regra 12: <atribuição> ::= <variável> := <expressão>
-    # (inline em _comando acima)
+        return node
 
     # Regra 14: <cmd condicional> ::= if <expr> then <cmd> [else <cmd>]
-    def _cmd_condicional(self):
-        self._consome("IF", "if")
-        self._expressao()
-        self._consome("THEN", "then")
-        self._comando()
+    def _cmd_condicional(self) -> ParseNode:
+        node = ParseNode("<cmd-if>")
+        node.add(self._consome("IF", "if"))
+        node.add(self._expressao())
+        node.add(self._consome("THEN", "then"))
+        node.add(self._comando())
         if self._check("ELSE"):
+            node.add(ParseNode("[else]", "else"))
             self._advance()
-            self._comando()
+            node.add(self._comando())
+        return node
 
     # Regra 15: <cmd repetitivo> ::= while <expr> do <cmd>
-    def _cmd_repetitivo(self):
-        self._consome("WHILE", "while")
-        self._expressao()
-        self._consome("DO", "do")
-        self._comando()
+    def _cmd_repetitivo(self) -> ParseNode:
+        node = ParseNode("<cmd-while>")
+        node.add(self._consome("WHILE", "while"))
+        node.add(self._expressao())
+        node.add(self._consome("DO", "do"))
+        node.add(self._comando())
+        return node
 
     # ---------------------------------------------------------------- Expressões
     # Regra 16: <expressão> ::= <expr simples> [<relação> <expr simples>]
-    def _expressao(self):
-        self._expr_simples()
+    def _expressao(self) -> ParseNode:
+        node = ParseNode("<expressão>")
+        node.add(self._expr_simples())
         if self._check("Equal", "diferente", "opMenor", "menorIgual",
                        "maiorIgual", "opMaior"):
-            self._advance()   # consome operador relacional
-            self._expr_simples()
+            t = self._advance()
+            node.add(ParseNode(f"[{t.tipo}]", t.lexema))
+            node.add(self._expr_simples())
+        return node
 
     # Regra 18: <expr simples> ::= [+|-] <termo> {(+|-|or) <termo>}
-    def _expr_simples(self):
+    def _expr_simples(self) -> ParseNode:
+        node = ParseNode("<expr-simples>")
         if self._check("opSoma", "opSub"):
-            self._advance()
-        self._termo()
+            t = self._advance()
+            node.add(ParseNode(f"[{t.tipo}]", t.lexema))
+        node.add(self._termo())
         while self._check("opSoma", "opSub", "OR"):
-            self._advance()
-            self._termo()
+            t = self._advance()
+            node.add(ParseNode(f"[{t.tipo}]", t.lexema))
+            node.add(self._termo())
+        return node
 
     # Regra 19: <termo> ::= <fator> {(*|div|and) <fator>}
-    def _termo(self):
-        self._fator()
+    def _termo(self) -> ParseNode:
+        node = ParseNode("<termo>")
+        node.add(self._fator())
         while self._check("opMult", "DIV", "AND"):
-            self._advance()
-            self._fator()
+            t = self._advance()
+            node.add(ParseNode(f"[{t.tipo}]", t.lexema))
+            node.add(self._fator())
+        return node
 
     # Regra 20: <fator> ::= <variável> | <número> | ( <expressão> ) | not <fator>
-    def _fator(self):
+    def _fator(self) -> ParseNode:
+        node = ParseNode("<fator>")
         tok = self._peek()
 
         if tok.tipo == "var":
             self._advance()
-            # <variável> pode ter índice: id [ <expressão> ]
+            var_node = ParseNode("[var]", tok.lexema)
             if self._check("abre_col"):
+                idx_node = ParseNode("<índice>")
+                idx_node.add(var_node)
+                idx_node.add(ParseNode("[(]", "["))
                 self._advance()
-                self._expressao()
-                self._consome("fecha_col", "]")
+                idx_node.add(self._expressao())
+                idx_node.add(self._consome("fecha_col", "]"))
+                node.add(idx_node)
+            else:
+                node.add(var_node)
 
         elif tok.tipo in ("inteiro", "real"):
             self._advance()
+            node.add(ParseNode(f"[{tok.tipo}]", str(tok.lexema)))
 
         elif tok.tipo in ("true", "false"):
             self._advance()
+            node.add(ParseNode(f"[{tok.tipo}]", tok.lexema))
 
         elif tok.tipo == "abre_p":
+            node.add(ParseNode("[(]", "("))
             self._advance()
-            self._expressao()
-            self._consome("fecha_p", ")")
+            node.add(self._expressao())
+            node.add(self._consome("fecha_p", ")"))
 
         elif tok.tipo == "NOT":
+            node.add(ParseNode("[NOT]", "not"))
             self._advance()
-            self._fator()
+            node.add(self._fator())
 
         else:
             self._erro(tok, "fator (variável, número, '(' ou 'not')")
             self._sincroniza(_SYNC_EXPRESSAO)
 
+        return node
+
     # Regra 22: <lista de expressões> ::= <expressão> {, <expressão>}
-    def _lista_expressoes(self):
-        self._expressao()
+    def _lista_expressoes(self) -> ParseNode:
+        node = ParseNode("<lista-expr>")
+        node.add(self._expressao())
         while self._check("virgula"):
+            node.add(ParseNode("[,]", ","))
             self._advance()
-            self._expressao()
+            node.add(self._expressao())
+        return node
 
 
 # ---------------------------------------------------------------------------
@@ -337,16 +421,19 @@ class Parser:
 def analisar_sintatico(tokens: list[dict]) -> dict:
     """
     Recebe a lista de tokens de lexicalanalyser.analisar()["tokens"]
-    e retorna {"erros_sintaticos": [...]}.
+    e retorna {
+        "erros_sintaticos": [...],
+        "arvore": ParseNode | None
+    }.
     """
-    # Remove tokens cujo tipo não faz parte da gramática
-    # (ex: comentários que porventura passem, ou tipos internos do PLY)
     parser = Parser(tokens)
-    parser.programa()
+    arvore = parser.programa()
 
-    # Se sobrou token antes do EOF, reporta
     sobra = parser._peek()
     if sobra.tipo != "EOF":
         parser._erro(sobra, "fim do programa (EOF)")
 
-    return {"erros_sintaticos": parser.erros}
+    return {
+        "erros_sintaticos": parser.erros,
+        "arvore": arvore,
+    }
